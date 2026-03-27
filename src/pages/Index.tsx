@@ -37,7 +37,7 @@ const Index = () => {
       </header>
 
       {/* Main Content */}
-      <main className="container max-w-lg mx-auto px-4 py-6">
+      <main className="container max-w-lg mx-auto px-4 pt-6 pb-20">
         {medicineInfo ? (
           <MedicineResults
             medicineInfo={medicineInfo}
