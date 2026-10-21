@@ -9,6 +9,9 @@ export default defineConfig(({ mode }) => {
     env.replicate_api_key ||
     env.VITE_REPLICATE_API_KEY ||
     env.REPLICATE_API_KEY ||
+    process.env.replicate_api_key ||
+    process.env.VITE_REPLICATE_API_KEY ||
+    process.env.REPLICATE_API_KEY ||
     "";
 
   return {

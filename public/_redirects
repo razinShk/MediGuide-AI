@@ -1,0 +1,2 @@
+/api/replicate/*  https://api.replicate.com/:splat  200!
+/*  /index.html  200

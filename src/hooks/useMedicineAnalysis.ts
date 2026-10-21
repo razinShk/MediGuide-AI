@@ -90,42 +90,19 @@ If you cannot identify the medicine with certainty, provide your best assessment
 
       const requestHeaders: Record<string, string> = {
         "Content-Type": "application/json",
-        "Prefer": "wait=60",
+        "Prefer": "wait=20",
       };
       if (apiKey) {
         requestHeaders["Authorization"] = `Bearer ${apiKey}`;
       }
 
-      // First try local proxy endpoint to bypass browser CORS restrictions
-      let endpoint = "/api/replicate/v1/models/google/gemini-2.5-flash/predictions";
-      let response: Response;
-
-      try {
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: requestHeaders,
-          body: JSON.stringify(requestBody),
-        });
-
-        // If local proxy returned 404 (e.g., in some static environments), fallback to direct API
-        if (response.status === 404) {
-          endpoint = "https://api.replicate.com/v1/models/google/gemini-2.5-flash/predictions";
-          response = await fetch(endpoint, {
-            method: "POST",
-            headers: requestHeaders,
-            body: JSON.stringify(requestBody),
-          });
-        }
-      } catch (networkError) {
-        // Fallback directly to Replicate if proxy fetch fails completely
-        console.warn("Proxy request failed, attempting direct call:", networkError);
-        endpoint = "https://api.replicate.com/v1/models/google/gemini-2.5-flash/predictions";
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: requestHeaders,
-          body: JSON.stringify(requestBody),
-        });
-      }
+      // Always route through /api/replicate to avoid CORS restrictions in browsers
+      const endpoint = "/api/replicate/v1/models/google/gemini-2.5-flash/predictions";
+      let response = await fetch(endpoint, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
+      });
 
       // Handle Replicate rate limits (429) with a short retry
       if (response.status === 429) {
