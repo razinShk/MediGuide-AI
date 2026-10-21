@@ -22,10 +22,14 @@ export function useMedicineAnalysis() {
     setIsAnalyzing(true);
     setError(null);
 
-    const apiKey = import.meta.env.VITE_FIREWORKS_API_KEY;
+    // Read replicate_api_key from environment variables
+    const apiKey =
+      import.meta.env.replicate_api_key ||
+      import.meta.env.VITE_REPLICATE_API_KEY ||
+      "";
 
     if (!apiKey) {
-      const message = "VITE_FIREWORKS_API_KEY is not configured";
+      const message = "replicate_api_key is not configured in .env";
       console.error(message);
       setError(message);
       toast({
@@ -37,26 +41,26 @@ export function useMedicineAnalysis() {
       return;
     }
 
-    // Extract base64 data from data URL if present
-    const base64Data = base64Image.includes("base64,")
-      ? base64Image.split("base64,")[1]
-      : base64Image;
+    // Format image as Data URI if not already
+    const formattedImage = base64Image.startsWith("data:")
+      ? base64Image
+      : `data:image/jpeg;base64,${base64Image}`;
 
-    const prompt = `You are a medical information assistant. Analyze the medicine shown in this image and provide detailed information in a structured JSON format.
-IMPORTANT: The values of the JSON object MUST be in ${language} language.
+    const prompt = `You are a medical information assistant and pharmacist. Analyze the medicine packaging, blister pack, bottle, tablet, or label shown in this image and provide detailed, reliable information in a structured JSON format.
+IMPORTANT: The values of the JSON object MUST be written in ${language} language.
 
 Provide the following information:
 1. name: The medicine name (generic and brand name if visible)
-2. type: The type/category of medicine (e.g., antibiotic, analgesic, antacid, etc.)
-3. dosage: Recommended dosage information
+2. type: The type/category of medicine (e.g., antibiotic, analgesic, antacid, antihistamine, etc.)
+3. dosage: Recommended dosage information or strength visible on the packaging
 4. timing: When to take the medicine (e.g., before meals, after meals, morning/night)
 5. uses: What conditions this medicine is used to treat
 6. sideEffects: Common side effects to be aware of
-7. interactions: Drug interactions and what to avoid
+7. interactions: Known drug interactions and what to avoid
 8. storage: How to properly store this medicine
-9. warnings: Important precautions and warnings
+9. warnings: Important precautions, contraindications, and warnings
 
-IMPORTANT: Respond ONLY with a valid JSON object in this exact format, no other text:
+IMPORTANT: Respond ONLY with a valid JSON object in this exact format, with no extra commentary or markdown:
 {
   "name": "Medicine Name",
   "type": "Medicine Type",
@@ -69,77 +73,172 @@ IMPORTANT: Respond ONLY with a valid JSON object in this exact format, no other 
   "warnings": "Important warnings"
 }
 
-If you cannot identify the medicine clearly, provide your best assessment based on what's visible, or indicate that the image is unclear. All values must be in ${language}.`;
+If you cannot identify the medicine with certainty, provide your best assessment based on what is visible, and clearly state precautions in the warnings field. All values must be in ${language}.`;
 
     try {
-      console.log(`Calling Fireworks API for medicine analysis in ${language}...`);
+      console.log(`Calling Replicate google/gemini-2.5-flash for medicine analysis in ${language}...`);
 
-      const response = await fetch("https://api.fireworks.ai/inference/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+      const requestBody = {
+        input: {
+          prompt,
+          system_instruction: "You are an expert pharmacist and medical assistant. You analyze medicine packaging, tablets, capsules, labels, and prescriptions accurately and provide information strictly in valid JSON format in the requested language.",
+          images: [formattedImage],
+          temperature: 0.2,
+          max_output_tokens: 4096,
         },
-        body: JSON.stringify({
-          model: "accounts/fireworks/models/qwen3-vl-30b-a3b-instruct",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: prompt,
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${base64Data}`,
-                  },
-                },
-              ],
-            },
-          ],
-          max_tokens: 2048,
-          temperature: 0.3,
-        }),
-      });
+      };
+
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        "Prefer": "wait=60",
+      };
+      if (apiKey) {
+        requestHeaders["Authorization"] = `Bearer ${apiKey}`;
+      }
+
+      // First try local proxy endpoint to bypass browser CORS restrictions
+      let endpoint = "/api/replicate/v1/models/google/gemini-2.5-flash/predictions";
+      let response: Response;
+
+      try {
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify(requestBody),
+        });
+
+        // If local proxy returned 404 (e.g., in some static environments), fallback to direct API
+        if (response.status === 404) {
+          endpoint = "https://api.replicate.com/v1/models/google/gemini-2.5-flash/predictions";
+          response = await fetch(endpoint, {
+            method: "POST",
+            headers: requestHeaders,
+            body: JSON.stringify(requestBody),
+          });
+        }
+      } catch (networkError) {
+        // Fallback directly to Replicate if proxy fetch fails completely
+        console.warn("Proxy request failed, attempting direct call:", networkError);
+        endpoint = "https://api.replicate.com/v1/models/google/gemini-2.5-flash/predictions";
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify(requestBody),
+        });
+      }
+
+      // Handle Replicate rate limits (429) with a short retry
+      if (response.status === 429) {
+        console.log("Rate limit encountered, retrying after delay...");
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: requestHeaders,
+          body: JSON.stringify(requestBody),
+        });
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("Fireworks API error:", response.status, errorText);
-        throw new Error(`Failed to analyze medicine: ${response.statusText}`);
+        console.error("Replicate API error:", response.status, errorText);
+        let errorJson: { detail?: string } = {};
+        try {
+          errorJson = JSON.parse(errorText);
+        } catch {
+          // not json
+        }
+        throw new Error(errorJson.detail || `Failed to analyze medicine: ${response.statusText} (${response.status})`);
       }
 
-      const data = await response.json();
-      console.log("Fireworks API response received");
+      let prediction = await response.json();
+      console.log("Replicate API initial response status:", prediction.status);
 
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error("No response from AI model");
+      // If prediction is still processing, poll until complete
+      if (prediction.status === "starting" || prediction.status === "processing") {
+        const pollUrl = prediction.urls?.get
+          ? prediction.urls.get.replace("https://api.replicate.com", "/api/replicate")
+          : `/api/replicate/v1/predictions/${prediction.id}`;
+
+        const maxPollAttempts = 30; // 30 * 2s = 60s max
+        for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+
+          const pollResponse = await fetch(pollUrl, {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+            },
+          });
+
+          if (pollResponse.ok) {
+            prediction = await pollResponse.json();
+            if (
+              prediction.status === "succeeded" ||
+              prediction.status === "failed" ||
+              prediction.status === "canceled"
+            ) {
+              break;
+            }
+          }
+        }
       }
 
-      // Try to extract JSON from the response
-      let parsedInfo;
+      if (prediction.status === "failed" || prediction.error) {
+        throw new Error(prediction.error || "Replicate prediction failed to complete.");
+      }
+
+      if (prediction.status === "canceled") {
+        throw new Error("Medicine analysis was canceled.");
+      }
+
+      // Extract output text
+      const output = prediction.output;
+      if (!output) {
+        throw new Error("No output received from Gemini 2.5 Flash model.");
+      }
+
+      const rawContent = Array.isArray(output) ? output.join("") : String(output);
+      console.log("Raw output from Gemini 2.5 Flash:", rawContent);
+
+      // Clean markdown code blocks if any
+      const cleanedContent = rawContent
+        .replace(/```json\s*/gi, "")
+        .replace(/```\s*$/gi, "")
+        .trim();
+
+      // Extract JSON object safely
+      let parsedInfo: MedicineInfo;
       try {
-        // First, try to find JSON in the response (handling thinking tokens or markdown code blocks)
-        const jsonMatch = content.match(/\{[\s\S]*"name"[\s\S]*"warnings"[\s\S]*\}/);
-        if (jsonMatch) {
-          parsedInfo = JSON.parse(jsonMatch[0]);
+        const firstBrace = cleanedContent.indexOf("{");
+        const lastBrace = cleanedContent.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          const jsonString = cleanedContent.substring(firstBrace, lastBrace + 1);
+          parsedInfo = JSON.parse(jsonString);
         } else {
-          // If no JSON found, try parsing the whole content
-          parsedInfo = JSON.parse(content);
+          parsedInfo = JSON.parse(cleanedContent);
         }
       } catch (parseError) {
-        console.error("Failed to parse AI response as JSON:", content);
-        throw new Error("Could not parse medicine information from the response.");
+        console.error("Failed to parse Gemini response as JSON:", rawContent, parseError);
+        throw new Error("Could not parse medicine information from the AI response.");
       }
 
-      setMedicineInfo(parsedInfo);
+      // Normalize fields to ensure full MedicineInfo compliance
+      const normalizedInfo: MedicineInfo = {
+        name: parsedInfo.name || "Unknown Medicine",
+        type: parsedInfo.type || "N/A",
+        dosage: parsedInfo.dosage || "Consult a healthcare professional",
+        timing: parsedInfo.timing || "As prescribed",
+        uses: parsedInfo.uses || "N/A",
+        sideEffects: parsedInfo.sideEffects || "None listed",
+        interactions: parsedInfo.interactions || "None listed",
+        storage: parsedInfo.storage || "Store in a cool, dry place",
+        warnings: parsedInfo.warnings || "Keep out of reach of children. Consult doctor before use.",
+      };
+
+      setMedicineInfo(normalizedInfo);
       toast({
         title: "Analysis Complete!",
-        description: `Successfully identified: ${parsedInfo.name}`,
+        description: `Successfully identified: ${normalizedInfo.name}`,
       });
-
     } catch (err) {
       console.error("Error in analyzeMedicine:", err);
       const message = err instanceof Error ? err.message : "Failed to analyze medicine";
@@ -167,3 +266,4 @@ If you cannot identify the medicine clearly, provide your best assessment based 
     reset,
   };
 }
+

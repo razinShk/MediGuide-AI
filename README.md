@@ -61,4 +61,4 @@ To run this project locally, follow these steps:
 
 ## Author
 
-**Made and Designed by Zaid AI**
+**Built by Maruf Mansuri**
