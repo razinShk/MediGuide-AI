@@ -60,6 +60,8 @@ flowchart TD
 
 ### B. Core AI & Prompting Workflow (Upload $\rightarrow$ AI $\rightarrow$ Display)
 
+![MediGuide AI: Image Analysis Pipeline](ai_workflow_infographic.jpg)
+
 ```mermaid
 flowchart TD
     %% Step 1: User Upload
@@ -251,12 +253,95 @@ These are the fundamental, conversational questions interviewers ask first to ga
 
 ---
 
+---
+
 ### Q14: How did you test this application?
 > **Model Answer:**  
 > "We tested on three levels:
 > 1. **Unit Testing:** Using **Vitest** and **React Testing Library** in [`src/test/useMedicineAnalysis.test.ts`](file:///Users/razinshk/Downloads/MediGuide-AI-main/src/test/useMedicineAnalysis.test.ts) to verify hook state transitions, Replicate Gemini 2.5 Flash response parsing, and state reset functionality.
 > 2. **Build Verification:** Tested production bundling using `npm run build` to verify clean TypeScript compilation and asset generation.
 > 3. **Manual Cross-Device Testing:** Tested native camera stream and file uploads across mobile and desktop browsers to verify responsive layout and language translations."
+
+---
+
+## 4.1. Targeted Basic Questions on the Post-Upload AI Pipeline
+
+These questions focus specifically on the exact mechanics of what happens between the user clicking "Analyze" and the results appearing on the screen.
+
+---
+
+### Q14.1: Once the user clicks "Analyze Medicine", what is the very first thing the code does?
+> **Model Answer:**  
+> "The click handler calls `analyzeMedicine(base64Image, selectedLanguage)` inside the `useMedicineAnalysis` hook. Immediately, the hook sets `isAnalyzing = true` and `error = null`. This causes React to re-render the screen from the image preview to the animated `<LoadingState />` component showing pulsing medicine icons, indicating to the user that work is happening."
+
+---
+
+### Q14.2: Why do we convert the image to a Base64 string instead of using traditional multipart file upload?
+> **Model Answer:**  
+> "Converting to a Base64 Data URI (`data:image/jpeg;base64,...`) allows us to bundle the image directly inside the JSON request body alongside the text prompt and settings. This eliminates the need for multipart/form-data boundary parsing, removes the requirement for a separate cloud storage bucket (like AWS S3), and allows Replicate's API to receive everything in a single, lightweight payload."
+
+---
+
+### Q14.3: What exact instructions (prompt) are passed to the AI model?
+> **Model Answer:**  
+> "The request contains two prompt layers:
+> 1. **System Instruction:** Sets the persona: *'You are an expert pharmacist and medical assistant. You analyze medicine packaging, blister packs, bottles, tablets, and labels accurately in the requested language.'*
+> 2. **User Prompt:** Specifies the exact 9 fields to extract (`name`, `type`, `dosage`, `timing`, `uses`, `sideEffects`, `interactions`, `storage`, `warnings`), injects the user's chosen language (e.g. Hindi, Spanish), and commands: *'Respond ONLY with a valid JSON object in this exact format, with no extra commentary or markdown.'*"
+
+---
+
+### Q14.4: Why does the browser send the request to `/api/replicate/...` instead of `https://api.replicate.com`?
+> **Model Answer:**  
+> "Because of browser CORS (Cross-Origin Resource Sharing) security. Replicate's servers do not return the `Access-Control-Allow-Origin` header to browsers, so any direct `fetch('https://api.replicate.com/...')` is blocked by the browser. By sending to `/api/replicate/...`, the request is sent to our own domain (same-origin). In development, Vite proxies it, and in production, Netlify's Edge CDN proxies it server-to-server to Replicate without any CORS blockage."
+
+---
+
+### Q14.5: What happens on Replicate and Gemini 2.5 Flash during inference?
+> **Model Answer:**  
+> "Replicate receives our JSON payload, routes it to Google's Gemini 2.5 Flash container, and passes the image and prompt to the model. Gemini 2.5 Flash runs optical character recognition (OCR) on the packaging, reads brand and generic names, recognizes the pill or bottle visually, references its medical knowledge base for uses and side effects, translates the text into the requested language, and outputs the structured JSON tokens in ~1.2 seconds."
+
+---
+
+### Q14.6: What does the raw response look like when it returns from Replicate?
+> **Model Answer:**  
+> "Replicate responds with HTTP 200 and a JSON object containing:
+> ```json
+> {
+>   \"id\": \"pred_abc123\",
+>   \"status\": \"succeeded\",
+>   \"output\": [\"```json\\n{\\n  \\\"name\\\": \\\"Paracetamol 500mg\\\",\\n  ...\\n}\\n```\"]
+> }
+> ```
+> The `output` field is an array of text chunks that form the JSON string."
+
+---
+
+### Q14.7: Why can't we immediately display the raw AI response on screen? What is the cleaning step?
+> **Model Answer:**  
+> "AI models frequently wrap their JSON output in Markdown formatting (such as ```` ```json ```` and ```` ``` ````) or include leading whitespace. If we ran `JSON.parse()` directly on this raw string, it would throw a syntax error.  
+> 
+> Our cleaning step:
+> 1. Strips away the markdown code block tags using regex.
+> 2. Finds the exact outer boundaries of the JSON object using `indexOf('{')` and `lastIndexOf('}')`.
+> 3. Parses the clean substring with `JSON.parse()`.
+> 4. Normalizes all fields with safe fallback defaults so no card in the UI displays `undefined`."
+
+---
+
+### Q14.8: What is polling and why do we have a 20-second timeout?
+> **Model Answer:**  
+> "We pass the header `Prefer: wait=20` to Replicate. If Gemini finishes within 20 seconds (which it almost always does in ~1.2s), Replicate returns the result synchronously in that single request.  
+> 
+> However, Netlify proxy connections time out after 26 seconds. By setting `wait=20`, we guarantee that if the AI model ever takes longer, Replicate responds before Netlify's 26s cutoff with `status: 'processing'`. When that happens, our hook enters a polling loop, sending lightweight GET requests to `/api/replicate/v1/predictions/:id` every 2 seconds until the status turns to `'succeeded'`."
+
+---
+
+### Q14.9: How does the frontend update the screen once the analysis is done?
+> **Model Answer:**  
+> "Once the data is cleaned and normalized into a typed `MedicineInfo` object:
+> 1. The hook calls `setMedicineInfo(normalizedInfo)` and `setIsAnalyzing(false)`.
+> 2. It triggers a green success toast (`'Analysis Complete! Successfully identified: ...'`).
+> 3. React re-renders the page, unmounting the loading spinner and mounting the `<MedicineResults />` component, which renders the 7 color-coded cards with icons and smooth animations."
 
 ---
 
